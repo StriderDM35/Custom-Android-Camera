@@ -18,3 +18,6 @@ Custom camera made for Sony Xperia 1 iii phone using Android Studio!
 - Video features such as waveforms, audio levels, zebras etc.
 - Object detection
 - Do this for older pohnes such Xperia Z3
+
+# References
+custom_camera_a6: For Sony Xperia 1 iii specifically
