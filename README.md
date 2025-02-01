@@ -2,6 +2,10 @@
 Custom camera made for Sony Xperia 1 iii phone using Android Studio!
 
 # Updates
+1-Feb-2025
+- Attempted to import and build OpenCV 4.10 (yet to succeed)
+- Implemented basic noise reduction feature
+
 30-Jan-2025
 - Implemented visual feedback for autofocus: ring remains green if AF succeeds, and ring will become red if AF fails
 - App can now cycle through all the cameras on the phone, including the front and 3 rear cameras (UWA, WA, Tele)
