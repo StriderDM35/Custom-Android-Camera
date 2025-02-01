@@ -72,6 +72,8 @@
         android:max="200"
         android:progress="100"
         android:layout_centerHorizontal="true"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
     />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

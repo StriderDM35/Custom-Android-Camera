@@ -21,4 +21,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "CustomCameraA6"
 include(":app")
- 
+include(":opencv")
+project(":opencv").projectDir = File(rootDir, "opencv")
+// project(":sdk").projectDir = File(rootDir, "OpenCV-android-sdk/sdk/")
+include(":sdk")
+include(":sdk")
+include(":opencv")

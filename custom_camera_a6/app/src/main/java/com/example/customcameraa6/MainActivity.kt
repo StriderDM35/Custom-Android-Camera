@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.Matrix
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Build
@@ -21,6 +22,11 @@ import android.widget.ArrayAdapter
 import android.widget.ImageView
 import android.widget.Spinner
 import android.widget.Toast
+import android.renderscript.RenderScript
+import android.renderscript.Allocation
+import android.renderscript.ScriptIntrinsicBlur
+import android.renderscript.Element
+import androidx.camera.core.ImageProxy
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -44,6 +50,8 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
 import com.example.customcameraa6.databinding.ActivityMainBinding
@@ -95,41 +103,94 @@ class MainActivity : AppCompatActivity() {
         // Get a stable reference of the modifiable image capture use case
         val imageCapture = imageCapture ?: return
 
-        // Create time stamped name and MediaStore entry.
-        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
-            .format(System.currentTimeMillis())
+        // Set up image capture listener, which is triggered after photo has been taken
+        // takePicture has 2 overloaded functions - take note of this!
+        imageCapture.takePicture(
+            //outputOptions,
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy){
+                    val bitmap = imageProxyToBitmap(image)
+                    image.close() // Close the ImageProxy to avoid memory leaks
+
+                    // Apply noise reduction
+                    val denoisedBitmap = applyNoiseReduction(bitmap)
+
+                    // Save only the processed image
+                    saveProcessedImage(denoisedBitmap)
+//                    val msg = "Photo capture succeeded: ${output.savedUri}"
+//                    Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
+//                    Log.d(TAG, msg)
+                }
+                override fun onError(exc: ImageCaptureException) {
+                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
+                }
+            }
+        )
+    }
+
+    // Converting it to a bitmap allows us to perform some processing on the image
+    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
+        val buffer = image.planes[0].buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        val originalBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+
+        // Get the rotation from ImageProxy
+        val rotationDegrees = image.imageInfo.rotationDegrees
+
+        // Rotate the bitmap
+        return rotateBitmap(originalBitmap, rotationDegrees)
+    }
+
+    private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+        val matrix = Matrix()
+        matrix.postRotate(rotationDegrees.toFloat())
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
+
+    private fun applyNoiseReduction(bitmap: Bitmap): Bitmap {
+        val renderScript = RenderScript.create(this)
+        val input = Allocation.createFromBitmap(renderScript, bitmap)
+        val output = Allocation.createTyped(renderScript, input.type)
+
+        val blurScript = ScriptIntrinsicBlur.create(renderScript, Element.U8_4(renderScript))
+        blurScript.setRadius(1f) // Blur intensity (1f-25f)
+        blurScript.setInput(input)
+        blurScript.forEach(output)
+
+        output.copyTo(bitmap)
+        renderScript.destroy()
+
+        return bitmap
+    }
+
+    private fun saveProcessedImage(bitmap: Bitmap) {
+        val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US).format(System.currentTimeMillis())
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            if(Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraX-Image")
             }
         }
 
-        // Create output options object which contains file + metadata
-        val outputOptions = ImageCapture.OutputFileOptions
-            .Builder(contentResolver,
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                contentValues)
-            .build()
-
-        // Set up image capture listener, which is triggered after photo has been taken
-        imageCapture.takePicture(
-            outputOptions,
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
-                }
-
-                override fun
-                        onImageSaved(output: ImageCapture.OutputFileResults){
-                    val msg = "Photo capture succeeded: ${output.savedUri}"
-                    Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
-                    Log.d(TAG, msg)
-                }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+        uri?.let {
+            contentResolver.openOutputStream(it)?.use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
             }
-        )
+            Log.d(TAG, "Processed image saved at: $uri")
+
+            // Show a Toast message on the screen
+            runOnUiThread {
+                Toast.makeText(this, "Photo saved successfully!", Toast.LENGTH_SHORT).show()
+
+                // For more visible notification
+                //Snackbar.make(findViewById(android.R.id.content), "Photo saved!", Snackbar.LENGTH_SHORT).show()
+
+            }
+        }
     }
 
     private fun captureVideo() {
@@ -427,7 +488,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 bindCameraUseCases(selectedCameraSelector.second, preview)
                 // Enable zoom after camera is selected and bound
-                enableOpticalZoom(cameraPair.first)
+                //enableOpticalZoom(cameraPair.first)
             }
 
             override fun onNothingSelected(parent: AdapterView<*>) {
@@ -457,45 +518,45 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun enableOpticalZoom(cameraId: String) {
-        val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-
-            // Check if the camera supports optical zoom (SCALER_AVAILABLE_OPTICAL_ZOOM)
-            val opticalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_OPTICAL_ZOOM)
-
-            // Only proceed if optical zoom is supported and if the cameraId is "3"
-            if (opticalZoom != null && cameraId == "3") {
-                // Get the maximum zoom ratio from the camera characteristics
-                val maxOpticalZoom = opticalZoom.toFloat()
-
-                // Add this logic in a UI element, such as SeekBar, for the user to adjust zoom ratio
-                val zoomSeekBar: SeekBar = findViewById(R.id.zoomSeekBar) // Assuming you have a SeekBar in your layout
-                zoomSeekBar.max = (maxOpticalZoom * 100).toInt()  // Set max zoom based on camera's optical zoom
-                zoomSeekBar.progress = 100  // Start at 1x zoom (progress scale of 100)
-
-                zoomSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                        val zoomRatio = progress / 100f  // Convert SeekBar progress to zoom ratio
-                        // Apply the zoom ratio using CameraControl
-                        camera?.let { cam ->
-                            val cameraControl = cam.cameraControl
-                            cameraControl.setZoomRatio(zoomRatio)
-                            Log.d(TAG, "Zoom set to $zoomRatio for camera $cameraId")
-                        }
-                    }
-
-                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-                })
-            } else {
-                Log.d(TAG, "Optical zoom not supported on camera $cameraId or cameraId is not '3'")
-            }
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Error accessing camera for zoom", e)
-        }
-    }
+//    private fun enableOpticalZoom(cameraId: String) {
+//        val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+//        try {
+//            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+//
+//            // Check if the camera supports optical zoom (SCALER_AVAILABLE_OPTICAL_ZOOM)
+//            val opticalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_OPTICAL_ZOOM)
+//
+//            // Only proceed if optical zoom is supported and if the cameraId is "3"
+//            if (opticalZoom != null && cameraId == "3") {
+//                // Get the maximum zoom ratio from the camera characteristics
+//                val maxOpticalZoom = opticalZoom.toFloat()
+//
+//                // Add this logic in a UI element, such as SeekBar, for the user to adjust zoom ratio
+//                val zoomSeekBar: SeekBar = findViewById(R.id.zoomSeekBar) // Assuming you have a SeekBar in your layout
+//                zoomSeekBar.max = (maxOpticalZoom * 100).toInt()  // Set max zoom based on camera's optical zoom
+//                zoomSeekBar.progress = 100  // Start at 1x zoom (progress scale of 100)
+//
+//                zoomSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+//                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+//                        val zoomRatio = progress / 100f  // Convert SeekBar progress to zoom ratio
+//                        // Apply the zoom ratio using CameraControl
+//                        camera?.let { cam ->
+//                            val cameraControl = cam.cameraControl
+//                            cameraControl.setZoomRatio(zoomRatio)
+//                            Log.d(TAG, "Zoom set to $zoomRatio for camera $cameraId")
+//                        }
+//                    }
+//
+//                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+//                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+//                })
+//            } else {
+//                Log.d(TAG, "Optical zoom not supported on camera $cameraId or cameraId is not '3'")
+//            }
+//        } catch (e: CameraAccessException) {
+//            Log.e(TAG, "Error accessing camera for zoom", e)
+//        }
+//    }
 
     @androidx.camera.camera2.interop.ExperimentalCamera2Interop
     private fun requestPermissions() {
